@@ -21,7 +21,6 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.linear_model import LinearRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neighbors import KNeighborsRegressor
-from sklearn.cross_validation import train_test_split
 from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.ensemble import BaggingClassifier
@@ -30,7 +29,8 @@ from sklearn.ensemble import VotingClassifier
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import LabelBinarizer
-from sklearn.svm import SVC
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.tree import DecisionTreeClassifier
 
 #System
 from os import path
@@ -46,6 +46,7 @@ def is_default(line):
 
     return line['loan_status'] in values_perceived_as_default
 
+
 def group_title_column(line):
     values_preserved = ['Debt consolidation',
                         'Credit card refinancing',
@@ -58,6 +59,7 @@ def group_title_column(line):
         return 'Other'
     else:
         return line['title']
+
 
 def numerate_pymnt_d(value):
     translator = dict(zip(['Jan',
@@ -78,6 +80,7 @@ def numerate_pymnt_d(value):
     else:
         return translator[value[:3]] + 12*int(value[-4:])
 
+
 def numerate_emp_length(value):
     if value == '< 1 year':
         return 0
@@ -87,6 +90,7 @@ def numerate_emp_length(value):
         return np.nan
     else:
         return int(value.split()[0])
+
 
 def input_values(X, y, model=None):
     if model:
@@ -110,10 +114,10 @@ print("Start time: ", time.asctime())
 #########################
 ##Step 1: Load the data##
 #########################
-directory = r"/home/oskar/PycharmProjects/McKinsey predictions/lending-club-loan-data"
+directory = r"C:\Users\duos8001\Documents\Python\Machine Learning tutorial\Default Prediction\Data"
 filename = 'loan.csv'
 full_path = path.join(directory, filename)
-n = None
+n = 300000
 if n:
     raw_df = pd.read_csv(full_path).sample(n=n)
 else:
@@ -167,7 +171,7 @@ df['tot_cur_bal'][nan_indeces] = input_values(df[input_by].loc[useful_idx],
                                              to_input)
 
 
-input_by = ['tot_cur_bal', 'funded_amnt_inv', 'loan_amnt', 'funded_amnt', 'total_acc']
+input_by = ['funded_amnt_inv', 'loan_amnt', 'funded_amnt', 'total_acc', 'funded_amnt']
 useful_idx = df[input_by].dropna().index
 to_input = df['emp_length'][useful_idx]
 nan_indeces = df.loc[useful_idx][df['emp_length'][useful_idx].isnull()].index
@@ -184,6 +188,15 @@ for col in X.columns:
     encoder.fit(X[col])
     X[col] = encoder.transform(X[col])
 
+binarizer = LabelBinarizer()
+cols_to_binarize = [x for x in X.columns if len(X[x].value_counts())<10]
+for col in cols_to_binarize:
+    binarizer.fit(X[col])
+    binned_names = [col + '_' + str(x) for x in binarizer.classes_]
+    binned_values = np.transpose(binarizer.transform(X[col]))
+    d = dict(zip(binned_names, binned_values))
+    X = X.assign(**d)
+    X.drop(col, inplace = True, axis = 1)
 
 
 print("Data transformed")
@@ -203,28 +216,30 @@ print("Data transformed")
 ##########################
 ##Step 4: Training model##
 ##########################
-# best_separators = ['id', 'member_id', 'delinq_2yrs', 'pub_rec', 'annual_inc', 'total_rec_prncp', 'last_pymnt_amnt']
-# X = df[best_separators]
-# y = df['is_default']
-#
-#
-# basic_model = VotingClassifier([('rbf', SVC()), ('poly', SVC(kernel='poly', degree=3)), ('sig', SVC(kernel='sigmoid')), ('lin', SVC(kernel='linear'))])
-basic_model = RandomForestClassifier(n_estimators=30)
-model = AdaBoostClassifier(basic_model, n_estimators=5)
+model_selector = 'rand_forest'
+reductor_selector = 'none'
+seed = 17
 
-# X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-# model.fit(X_train, y_train)
-# score = model.score(X_test, y_test)
-# print("Accuracy of trained model without feature space transformation is {:.2f}%".format(100*score))
+models = {'rand_forest' : RandomForestClassifier(n_estimators=500, verbose=2, max_depth=4, max_features=50, random_state=seed),
+          'boosted_trees' : GradientBoostingClassifier(n_estimators=1600, verbose=2, max_features=40, subsample=0.5, random_state=seed)}
+model = models.get(model_selector)
+reductors = {'pca' : PCA(n_components=len(X.columns), random_state=seed),
+             'lda' : LinearDiscriminantAnalysis(n_components=len(X.columns), random_state=seed),
+             'none' : None}
+red = reductors.get(reductor_selector)
 
-# red = PCA(n_components=len(X.columns))
-print("Feature space transformation")
-red = LinearDiscriminantAnalysis(n_components=len(X.columns))
-red.fit(X,y)
-X_r = red.transform(X)
-X_train, X_test, y_train, y_test = train_test_split(X_r, y, test_size=0.05)
+if red:
+    print("Feature space transformation")
+    red.fit(X,y)
+    X_r = red.transform(X)
+    X_train, X_test, y_train, y_test = train_test_split(X_r, y, test_size=0.05, random_state=seed)
+    msg = lambda x: "Accuracy of trained model with feature space transformation is {:.4f}%".format(100*x)
+else:
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.05, random_state=seed)
+    msg = lambda x: "Accuracy of trained model without feature space transformation is {:.4f}%".format(100 * x)
+
 
 print("Training the model")
 model.fit(X_train, y_train)
 score = model.score(X_test, y_test)
-print("Accuracy of trained model with feature space transformation is {:.2f}%".format(100*score))
+print(msg(score))
